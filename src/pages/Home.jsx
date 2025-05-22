@@ -1,96 +1,170 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { toast } from 'react-toastify'
+import { useDispatch, useSelector } from 'react-redux'
 import { getIcon } from '../utils/iconUtils'
 import MainFeature from '../components/MainFeature'
+import { fetchTasks, updateTask, deleteTask } from '../services/taskService'
+import { fetchCategories } from '../services/categoryService'
+import { setTasksLoading, setTasksSuccess, setTasksError, updateTask as updateTaskAction, deleteTask as deleteTaskAction } from '../store/taskSlice'
+import { setCategoriesLoading, setCategoriesSuccess, setCategoriesError, setSelectedCategory } from '../store/categorySlice'
+import { useContext } from 'react'
+import { AuthContext } from '../App'
 
 function Home() {
-  const [categories, setCategories] = useState(() => {
-    const savedCategories = localStorage.getItem('taskflow-categories')
-    return savedCategories ? JSON.parse(savedCategories) : [
-      { id: '1', name: 'Work', color: '#3b82f6' },
-      { id: '2', name: 'Personal', color: '#8b5cf6' },
-      { id: '3', name: 'Shopping', color: '#f97316' },
-      { id: '4', name: 'Health', color: '#10b981' }
-    ]
-  })
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const { logout } = useContext(AuthContext);
   
-  const [tasks, setTasks] = useState(() => {
-    const savedTasks = localStorage.getItem('taskflow-tasks')
-    return savedTasks ? JSON.parse(savedTasks) : []
-  })
+  // Get state from Redux
+  const { tasks, loading: tasksLoading, error: tasksError } = useSelector((state) => state.tasks);
+  const { categories, loading: categoriesLoading, error: categoriesError, selectedCategory } = useSelector((state) => state.categories);
+  const { user } = useSelector((state) => state.user);
   
-  const [selectedCategory, setSelectedCategory] = useState('all')
+  // Local state for operations
+  const [isTaskUpdating, setIsTaskUpdating] = useState(false);
+  const [isTaskDeleting, setIsTaskDeleting] = useState(null);
   
-  // Save tasks and categories to localStorage whenever they change
+  // Fetch tasks and categories on component mount
   useEffect(() => {
-    localStorage.setItem('taskflow-tasks', JSON.stringify(tasks))
-  }, [tasks])
+    const loadData = async () => {
+      // Fetch categories first
+      dispatch(setCategoriesLoading());
+      const categoriesResult = await fetchCategories();
+      
+      if (categoriesResult.success) {
+        dispatch(setCategoriesSuccess(categoriesResult.data));
+      } else {
+        dispatch(setCategoriesError(categoriesResult.error));
+        toast.error(categoriesResult.error || 'Failed to load categories');
+      }
+      
+      // Then fetch tasks
+      dispatch(setTasksLoading());
+      const tasksResult = await fetchTasks(selectedCategory !== 'all' ? selectedCategory : null);
+      
+      if (tasksResult.success) {
+        dispatch(setTasksSuccess(tasksResult.data));
+      } else {
+        dispatch(setTasksError(tasksResult.error));
+        toast.error(tasksResult.error || 'Failed to load tasks');
+      }
+    };
+    
+    loadData();
+  }, [dispatch]);
   
+  // Fetch tasks when selected category changes
   useEffect(() => {
-    localStorage.setItem('taskflow-categories', JSON.stringify(categories))
-  }, [categories])
+    const loadTasks = async () => {
+      dispatch(setTasksLoading());
+      const result = await fetchTasks(selectedCategory !== 'all' ? selectedCategory : null);
+      
+      if (result.success) {
+        dispatch(setTasksSuccess(result.data));
+      } else {
+        dispatch(setTasksError(result.error));
+        toast.error(result.error || 'Failed to load tasks');
+      }
+    };
+    
+    // Only fetch if we've already loaded categories (to avoid double loading on initial mount)
+    if (categories.length > 0) {
+      loadTasks();
+    }
+  }, [selectedCategory, dispatch]);
   
   const handleTaskCreate = (newTask) => {
-    const taskWithId = {
-      ...newTask,
-      id: crypto.randomUUID(),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }
+    // Already handled in MainFeature component
+  }
+  
+  const handleTaskUpdate = async (updatedTask) => {
+    setIsTaskUpdating(true);
     
-    setTasks(prevTasks => [taskWithId, ...prevTasks])
-    toast.success('Task created successfully!')
+    try {
+      const result = await updateTask(updatedTask.Id, updatedTask);
+      
+      if (result.success) {
+        dispatch(updateTaskAction(result.data));
+        toast.success('Task updated successfully!');
+      } else {
+        toast.error(result.error || 'Failed to update task');
+      }
+    } catch (error) {
+      console.error('Error updating task:', error);
+      toast.error('An unexpected error occurred');
+    } finally {
+      setIsTaskUpdating(false);
+    }
   }
   
-  const handleTaskUpdate = (updatedTask) => {
-    setTasks(prevTasks => 
-      prevTasks.map(task => 
-        task.id === updatedTask.id ? 
-          { ...updatedTask, updatedAt: new Date().toISOString() } : 
-          task
-      )
-    )
-    toast.success('Task updated successfully!')
+  const handleTaskDelete = async (taskId) => {
+    setIsTaskDeleting(taskId);
+    
+    try {
+      const result = await deleteTask(taskId);
+      
+      if (result.success) {
+        dispatch(deleteTaskAction(taskId));
+        toast.success('Task deleted successfully!');
+      } else {
+        toast.error(result.error || 'Failed to delete task');
+      }
+    } catch (error) {
+      console.error('Error deleting task:', error);
+      toast.error('An unexpected error occurred');
+    } finally {
+      setIsTaskDeleting(null);
+    }
   }
   
-  const handleTaskDelete = (taskId) => {
-    setTasks(prevTasks => prevTasks.filter(task => task.id !== taskId))
-    toast.success('Task deleted successfully!')
-  }
-  
-  const handleTaskToggle = (taskId) => {
-    setTasks(prevTasks => 
-      prevTasks.map(task => 
-        task.id === taskId ? 
-          { 
-            ...task, 
-            status: task.status === 'completed' ? 'pending' : 'completed',
-            isCompleted: task.status !== 'completed',
-            updatedAt: new Date().toISOString() 
-          } : 
-          task
-      )
-    )
+  const handleTaskToggle = async (taskId) => {
+    // Find the task
+    const taskToToggle = tasks.find(task => task.Id === taskId);
+    
+    if (!taskToToggle) return;
+    
+    // Create updated task with toggled status
+    const updatedTask = { 
+      ...taskToToggle, 
+      status: taskToToggle.status === 'completed' ? 'pending' : 'completed',
+      isCompleted: taskToToggle.status !== 'completed'
+    };
+    
+    // Call the update function
+    await handleTaskUpdate(updatedTask);
   }
   
   const addCategory = (newCategory) => {
-    const categoryWithId = {
-      ...newCategory,
-      id: crypto.randomUUID()
-    }
-    setCategories(prev => [...prev, categoryWithId])
-    toast.success('Category added!')
+    // Already handled in MainFeature component
+  }
+
+  const handleCategorySelect = (categoryId) => {
+    dispatch(setSelectedCategory(categoryId));
   }
 
   const filteredTasks = selectedCategory === 'all' 
     ? tasks 
-    : tasks.filter(task => task.category === selectedCategory)
+    : tasks.filter(task => task.category === selectedCategory);
   
   // Icon components
   const ClipboardListIcon = getIcon('clipboard-list')
   const PlusIcon = getIcon('plus')
   const LogoIcon = getIcon('list-checks')
+  const LogoutIcon = getIcon('log-out')
+  
+  // If data is loading, show loading state
+  if ((categoriesLoading && categories.length === 0) || (tasksLoading && tasks.length === 0)) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-surface-50 to-surface-100 dark:from-surface-900 dark:to-surface-800">
+        <div className="text-center">
+          <div className="inline-block animate-spin mb-4 text-4xl">⏳</div>
+          <p className="text-lg text-surface-600 dark:text-surface-300">Loading TaskFlow...</p>
+        </div>
+      </div>
+    );
+  }
   
   return (
     <motion.div
@@ -98,15 +172,27 @@ function Home() {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       className="min-h-screen px-4 py-8 md:py-12 bg-gradient-to-br from-surface-50 to-surface-100 dark:from-surface-900 dark:to-surface-800"
-    >
+          <div className="flex items-center mb-4 sm:mb-0 text-center sm:text-left">
       <div className="container mx-auto max-w-5xl">
         {/* Header */}
         <motion.header 
+            </h1>
+            
+            {user && (
+              <div className="ml-4 flex items-center">
+                <span className="hidden sm:inline text-sm text-surface-600 dark:text-surface-400 mr-2">
+                  {user.emailAddress}
+                </span>
+                <button onClick={logout} className="text-surface-500 hover:text-red-500 p-1" title="Logout">
+                  <LogoutIcon className="h-4 w-4" />
+                </button>
+              </div>
+            )}
           initial={{ y: -20, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ delay: 0.1 }}
           className="mb-10 flex flex-col items-center sm:flex-row sm:justify-between"
-        >
+              onClick={() => handleCategorySelect('all')}
           <div className="flex items-center mb-4 sm:mb-0">
             <LogoIcon className="h-8 w-8 mr-3 text-primary" />
             <h1 className="text-3xl font-bold text-surface-800 dark:text-white">
@@ -120,18 +206,18 @@ function Home() {
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
                 selectedCategory === 'all' 
                   ? 'bg-primary text-white shadow-md' 
-                  : 'bg-white dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-100 dark:hover:bg-surface-700'
-              }`}
+                key={category.Id}
+                onClick={() => handleCategorySelect(category.Id)}
             >
-              All Tasks
+                  selectedCategory === category.Id 
             </button>
             
             {categories.map(category => (
               <button
-                key={category.id}
+                  borderLeft: selectedCategory === category.Id ? 'none' : `3px solid ${category.color}`
                 onClick={() => setSelectedCategory(category.id)}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                  selectedCategory === category.id 
+                {category.Name}
                     ? 'bg-primary text-white shadow-md' 
                     : 'bg-white dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-100 dark:hover:bg-surface-700'
                 }`}
@@ -179,9 +265,13 @@ function Home() {
               <h2 className="text-xl font-semibold mb-4 text-surface-800 dark:text-white flex items-center">
                 <ClipboardListIcon className="h-5 w-5 mr-2 text-primary" />
                 {selectedCategory === 'all' ? 'All Tasks' : 
-                  categories.find(c => c.id === selectedCategory)?.name + ' Tasks'}
+                  categories.find(c => c.Id === selectedCategory)?.Name + ' Tasks'}
                 <span className="ml-2 text-sm font-normal text-surface-500">
                   ({filteredTasks.length})
+                </span>
+                {tasksLoading && (
+                <span className="ml-2 inline-block animate-spin text-sm">
+                  ⏳
                 </span>
               </h2>
               
@@ -204,12 +294,11 @@ function Home() {
                   {filteredTasks.map((task, index) => {
                     // Get appropriate icons
                     const DeleteIcon = getIcon('trash-2')
-                    const EditIcon = getIcon('edit-3')
                     const CheckIcon = getIcon('check-circle')
                     const UndoIcon = getIcon('rotate-ccw')
                     
                     // Get category color
-                    const categoryObj = categories.find(c => c.id === task.category)
+                    const categoryObj = categories.find(c => c.Id === task.category)
                     const categoryColor = categoryObj?.color || '#64748b'
                     
                     // Priority classes
@@ -221,7 +310,7 @@ function Home() {
                     
                     return (
                       <motion.div
-                        key={task.id}
+                        key={task.Id}
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.1 * index, duration: 0.3 }}
@@ -229,15 +318,18 @@ function Home() {
                       >
                         <div className="flex items-start gap-3">
                           <button
-                            onClick={() => handleTaskToggle(task.id)}
+                            onClick={() => handleTaskToggle(task.Id)}
+                            disabled={isTaskUpdating}
                             className={`mt-1 rounded-full flex-shrink-0 p-1 transition-colors ${
                               task.status === 'completed' 
                                 ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
                                 : 'bg-surface-200 dark:bg-surface-700 text-surface-500 dark:text-surface-400 hover:bg-primary/20 dark:hover:bg-primary/20 hover:text-primary dark:hover:text-primary-light'
-                            }`}
+                            } ${isTaskUpdating ? 'opacity-50 cursor-not-allowed' : ''}`}
                             aria-label={task.status === 'completed' ? 'Mark as incomplete' : 'Mark as complete'}
                           >
-                            {task.status === 'completed' ? (
+                            {isTaskUpdating ? (
+                              <span className="inline-block animate-spin">⏳</span>
+                            ) : task.status === 'completed' ? (
                               <CheckIcon className="h-5 w-5" />
                             ) : (
                               <UndoIcon className="h-5 w-5" />
@@ -256,11 +348,18 @@ function Home() {
                               
                               <div className="flex space-x-2 ml-2">
                                 <button
-                                  onClick={() => handleTaskDelete(task.id)}
-                                  className="p-1.5 rounded-full text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors"
+                                  onClick={() => handleTaskDelete(task.Id)}
+                                  disabled={isTaskDeleting === task.Id}
+                                  className={`p-1.5 rounded-full text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors ${
+                                    isTaskDeleting === task.Id ? 'opacity-50 cursor-not-allowed' : ''
+                                  }`}
                                   aria-label="Delete task"
                                 >
-                                  <DeleteIcon className="h-4 w-4" />
+                                  {isTaskDeleting === task.Id ? (
+                                    <span className="inline-block animate-spin">⏳</span>
+                                  ) : (
+                                    <DeleteIcon className="h-4 w-4" />
+                                  )}
                                 </button>
                               </div>
                             </div>
@@ -301,7 +400,7 @@ function Home() {
                                     borderLeft: `2px solid ${categoryColor}`
                                   }}
                                 >
-                                  {categoryObj.name}
+                                  {categoryObj.Name}
                                 </span>
                               )}
                               
@@ -321,6 +420,13 @@ function Home() {
                       </motion.div>
                     )
                   })}
+                  
+                  {tasksLoading && filteredTasks.length > 0 && (
+                    <div className="py-4 text-center">
+                      <div className="inline-block animate-spin mr-2">⏳</div>
+                      <span className="text-surface-500 dark:text-surface-400">Loading tasks...</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

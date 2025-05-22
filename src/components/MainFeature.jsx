@@ -1,9 +1,17 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'react-toastify'
 import { getIcon } from '../utils/iconUtils'
+import { createTask } from '../services/taskService'
+import { createCategory } from '../services/categoryService'
+import { useDispatch } from 'react-redux'
+import { addTask } from '../store/taskSlice'
+import { addCategory } from '../store/categorySlice'
 
 function MainFeature({ onTaskCreate, categories, onAddCategory }) {
+  const dispatch = useDispatch();
+  
+  // State for form data
   const [taskData, setTaskData] = useState({
     title: '',
     description: '',
@@ -14,20 +22,24 @@ function MainFeature({ onTaskCreate, categories, onAddCategory }) {
     isCompleted: false
   })
   
+  // State for form management
   const [errors, setErrors] = useState({})
   const [showCategoryForm, setShowCategoryForm] = useState(false)
   const [newCategory, setNewCategory] = useState({ name: '', color: '#3b82f6' })
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isCategorySubmitting, setIsCategorySubmitting] = useState(false)
   
+  // Handle form input changes
   const handleTaskChange = (e) => {
     const { name, value } = e.target
     setTaskData(prev => ({ ...prev, [name]: value }))
     
-    // Clear error for this field if it exists
     if (errors[name]) {
       setErrors(prev => ({ ...prev, [name]: '' }))
     }
   }
   
+  // Validate form inputs
   const validateForm = () => {
     const newErrors = {}
     
@@ -43,37 +55,84 @@ function MainFeature({ onTaskCreate, categories, onAddCategory }) {
     return Object.keys(newErrors).length === 0
   }
   
-  const handleSubmit = (e) => {
+  // Handle task form submission
+  const handleSubmit = async (e) => {
     e.preventDefault()
     
     if (validateForm()) {
-      onTaskCreate(taskData)
-      // Reset form
-      setTaskData({
-        title: '',
-        description: '',
-        dueDate: '',
-        category: '',
-        priority: 'medium',
-        status: 'pending',
-        isCompleted: false
-      })
+      setIsSubmitting(true);
+      
+      try {
+        const result = await createTask(taskData);
+        
+        if (result.success) {
+          // Update Redux store
+          dispatch(addTask(result.data));
+          
+          // Call the parent component's callback
+          onTaskCreate(result.data);
+          
+          // Show success message
+          toast.success('Task created successfully!');
+          
+          // Reset form
+          setTaskData({
+            title: '',
+            description: '',
+            dueDate: '',
+            category: '',
+            priority: 'medium',
+            status: 'pending',
+            isCompleted: false
+          });
+        } else {
+          toast.error(result.error || 'Failed to create task');
+        }
+      } catch (error) {
+        console.error('Error creating task:', error);
+        toast.error('An unexpected error occurred');
+      } finally {
+        setIsSubmitting(false);
+      }
     } else {
-      toast.error('Please fill in all required fields')
+      toast.error('Please fill in all required fields');
     }
   }
   
-  const handleCategorySubmit = (e) => {
+  // Handle category form submission
+  const handleCategorySubmit = async (e) => {
     e.preventDefault()
     
     if (!newCategory.name.trim()) {
-      toast.error('Category name is required')
-      return
+      toast.error('Category name is required');
+      return;
     }
     
-    onAddCategory(newCategory)
-    setNewCategory({ name: '', color: '#3b82f6' })
-    setShowCategoryForm(false)
+    setIsCategorySubmitting(true);
+    
+    try {
+      const result = await createCategory(newCategory);
+      
+      if (result.success) {
+        // Update Redux store
+        dispatch(addCategory(result.data));
+        
+        // Call parent component's callback
+        onAddCategory(result.data);
+        
+        // Show success message and reset form
+        toast.success('Category added successfully!');
+        setNewCategory({ name: '', color: '#3b82f6' });
+        setShowCategoryForm(false);
+      } else {
+        toast.error(result.error || 'Failed to create category');
+      }
+    } catch (error) {
+      console.error('Error creating category:', error);
+      toast.error('An unexpected error occurred');
+    } finally {
+      setIsCategorySubmitting(false);
+    }
   }
   
   // Icon components
@@ -193,10 +252,13 @@ function MainFeature({ onTaskCreate, categories, onAddCategory }) {
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
           type="submit"
-          className="w-full button-primary flex items-center justify-center"
+          className="w-full button-primary flex items-center justify-center disabled:opacity-50"
+          disabled={isSubmitting}
         >
-          <SaveIcon className="h-5 w-5 mr-2" />
-          Create Task
+          {isSubmitting ? (
+            <span className="inline-block animate-spin mr-2">⏳</span>
+          ) : <SaveIcon className="h-5 w-5 mr-2" />}
+          {isSubmitting ? 'Creating...' : 'Create Task'}
         </motion.button>
       </form>
       
@@ -272,10 +334,13 @@ function MainFeature({ onTaskCreate, categories, onAddCategory }) {
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     type="submit"
-                    className="flex-1 button-primary flex items-center justify-center"
+                    className="flex-1 button-primary flex items-center justify-center disabled:opacity-50"
+                    disabled={isCategorySubmitting}
                   >
-                    <PlusIcon className="h-5 w-5 mr-1" />
-                    Add Category
+                    {isCategorySubmitting ? (
+                      <span className="inline-block animate-spin mr-2">⏳</span>
+                    ) : <PlusIcon className="h-5 w-5 mr-1" />}
+                    {isCategorySubmitting ? 'Adding...' : 'Add Category'}
                   </motion.button>
                 </div>
               </form>
